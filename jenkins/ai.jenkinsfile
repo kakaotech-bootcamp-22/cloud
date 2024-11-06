@@ -1,0 +1,67 @@
+pipeline {
+    agent any
+    environment {
+        AWS_REGION = 'ap-northeast-2'
+        ECR_REPO = "<ECR_AI_REPO_URL>" 
+        IMAGE_TAG = "${env.BUILD_ID}"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                script {
+                    sh 'pip install -r requirements.txt'
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    docker.withRegistry("https://${env.ECR_REPO}", "ecr:aws-credentials") {
+                        // Docker 이미지를 빌드하고 ECR로 푸시
+                        def image = docker.build("${env.ECR_REPO}:${IMAGE_TAG}")
+                        image.push()
+                    }
+                }
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                script {
+                    sh '''
+                    aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REPO
+                    docker push $ECR_REPO:$IMAGE_TAG
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to EKS') {
+            steps {
+                script {
+                    withCredentials([kubeconfigFile(credentialsId: 'kubeconfig-eks', variable: 'KUBECONFIG')]) {
+                        // Kubernetes에 배포 파일 적용 (AI용 YAML 파일)
+                        sh 'kubectl apply -f k8s/ai-deployment.yaml'
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'AI Deployment successful!'
+        }
+        failure {
+            echo 'AI Deployment failed.'
+        }
+    }
+}

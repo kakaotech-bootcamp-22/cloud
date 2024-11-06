@@ -1,0 +1,6 @@
+FROM openjdk:21-jdk-slim
+
+WORKDIR /app
+COPY target/backend-application.jar /app/backend-application.jar
+
+ENTRYPOINT ["java", "-jar", "/app/backend-application.jar"]
