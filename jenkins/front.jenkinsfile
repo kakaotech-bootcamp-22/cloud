@@ -1,0 +1,86 @@
+pipeline {
+    agent any
+
+    environment {
+        // S3 버킷 이름 & AWS 리전 설정
+        S3_BUCKET = 's3-ktb-22-fe'
+        AWS_REGION = 'ap-northeast-2'
+        CI = 'false' 
+        PATH = "$PATH:/usr/local/bin" // AWS CLI가 설치된 경로 추가
+
+    }
+
+    stages {
+        
+        // stage('Checkout') {
+        //     steps {
+        //         checkout scm
+        //     }
+        // }
+
+        stage('Checkout') {
+            steps {
+                checkout([$class: 'GitSCM', 
+                    branches: [[name: '*/main']], 
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/kakaotech-bootcamp-22/fe', 
+                        credentialsId: 'github-token' // 여기서 자격 증명 ID를 사용
+                    ]]
+                ])
+            }
+        }
+
+        stage('Check Branch') {
+            when {
+                expression { return env.BRANCH_NAME == 'main' }
+            }
+            steps {
+                echo 'Main branch detected. Proceeding with build.'
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                script {
+                    sh 'npm install'
+                }
+            }
+        }
+
+        stage('Build Frontend') {
+            steps {
+                script {
+                    sh 'npm run build'
+                }
+            }
+        }
+
+        // stage('Upload to S3') {
+        //     steps {
+        //         script {
+        //             sh '''
+        //             aws s3 sync build/ s3://$S3_BUCKET/ --region $AWS_REGION --delete
+        //             '''
+        //         }
+        //     }
+        // }
+        stage('Upload to S3') {
+            steps {
+                withCredentials([aws(credentialsId: 'hedther', accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                    sh '''
+                    aws s3 sync build/ s3://$S3_BUCKET/ --region $AWS_REGION --delete
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Frontend successfully deployed to S3!'
+        }
+        failure {
+            echo 'Deployment to S3 failed.'
+        }
+    }
+}
