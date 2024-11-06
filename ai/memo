@@ -1,0 +1,3 @@
+# AI 이미지 빌드 및 푸시
+docker build -t <ECR_AI_REPO_URL>:latest ./ai
+docker push <ECR_AI_REPO_URL>:latest

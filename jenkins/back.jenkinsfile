@@ -1,0 +1,67 @@
+pipeline {
+    agent any
+    environment {
+        AWS_REGION = 'ap-northeast-2'
+        ECR_REPO = "<ECR_BACKEND_REPO_URL>"  // ECR 리포지토리 URL로 변경
+        IMAGE_TAG = "${env.BUILD_ID}"       // 각 빌드마다 고유한 태그 사용
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build Application') {
+            steps {
+                script {
+                    sh './gradlew build' 
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    docker.withRegistry("https://${env.ECR_REPO}", "ecr:aws-credentials") {
+                        // 빌드된 애플리케이션을 포함한 Docker 이미지 생성
+                        def image = docker.build("${env.ECR_REPO}:${IMAGE_TAG}")
+                        image.push()
+                    }
+                }
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                script {
+                    sh '''
+                    aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REPO
+                    docker push $ECR_REPO:$IMAGE_TAG
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to EKS') {
+            steps {
+                script {
+                    withCredentials([kubeconfigFile(credentialsId: 'kubeconfig-eks', variable: 'KUBECONFIG')]) {
+                        // Kubernetes YAML 파일로 전체 배포
+                        sh 'kubectl apply -f k8s/backend-deployment.yaml'
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Deployment successful!'
+        }
+        failure {
+            echo 'Deployment failed.'
+        }
+    }
+}
