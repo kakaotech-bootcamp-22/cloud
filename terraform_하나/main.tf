@@ -1,3 +1,30 @@
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.24"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.region
+}
+
+provider "kubernetes" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", var.cluster_name]
+  }
+}
+
 # 가용 영역 가져오기
 data "aws_availability_zones" "available" {
   state = "available"
@@ -132,12 +159,19 @@ resource "aws_iam_role" "eks_cluster_role" {
       }
     ]
   })
-
-  managed_policy_arns = [
-    "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy",
-    "arn:aws:iam::aws:policy/AmazonEKSVPCResourceController"
-  ]
 }
+
+########################## IAM 정책 연결 방식 변경 시작 ##########################
+resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+  role       = aws_iam_role.eks_cluster_role.name
+}
+
+resource "aws_iam_role_policy_attachment" "eks_vpc_resource_controller" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSVPCResourceController"
+  role       = aws_iam_role.eks_cluster_role.name
+}
+########################## IAM 정책 연결 방식 변경 끝 ##########################
 
 # EKS 노드 그룹 역할
 resource "aws_iam_role" "eks_node_role" {
@@ -155,50 +189,27 @@ resource "aws_iam_role" "eks_node_role" {
       }
     ]
   })
-
-  managed_policy_arns = [
-    "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
-    "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
-    "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
-    "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-  ]
 }
 
-# EBS CSI Driver를 위한 IRSA 역할
-module "ebs_csi_irsa_role" {
-  source = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
-  version = "5.30.0"
-
-  role_name = "${var.cluster_name}-ebs-csi-role"
-  attach_ebs_csi_policy = true
-
-  oidc_providers = {
-    main = {
-      provider_arn               = module.eks.oidc_provider_arn
-      namespace_service_accounts = ["kube-system:ebs-csi-controller-sa"]
-    }
-  }
+########################## IAM 노드 정책 연결 방식 변경 시작 ##########################
+resource "aws_iam_role_policy_attachment" "eks_worker_node_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+  role       = aws_iam_role.eks_node_role.name
 }
 
-# 워크로드를 위한 추가 IAM 정책
-resource "aws_iam_policy" "eks_workload_policy" {
-  name        = "eks-workload-policy"
-  description = "Additional policy for EKS workloads"
+resource "aws_iam_role_policy_attachment" "eks_cni_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+  role       = aws_iam_role.eks_node_role.name
+}
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:ListBucket",
-          "s3:GetObject",
-          "s3:PutObject"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
+resource "aws_iam_role_policy_attachment" "ecr_read_only" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  role       = aws_iam_role.eks_node_role.name
+}
+
+resource "aws_iam_role_policy_attachment" "ssm_managed_instance" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+  role       = aws_iam_role.eks_node_role.name
 }
 
 # EKS 클러스터 생성
@@ -230,8 +241,8 @@ module "eks" {
       name         = "ai-node-group"
       instance_types = ["t3.medium"]
       min_size     = 1
-      max_size     = 3
-      desired_size = 2
+      max_size     = 2
+      desired_size = 1
 
       tags = {
         "Name" = "ai-node"
@@ -243,8 +254,8 @@ module "eks" {
       name         = "backend-node-group"
       instance_types = ["t3.medium"]
       min_size     = 1
-      max_size     = 3
-      desired_size = 2
+      max_size     = 2
+      desired_size = 1
 
       tags = {
         "Name" = "backend-node"
@@ -264,9 +275,9 @@ module "eks" {
     vpc-cni = {
       most_recent = true
     }
-    aws-ebs-csi-driver = {
-      service_account_role_arn = module.ebs_csi_irsa_role.iam_role_arn
-    }
+  #  aws-ebs-csi-driver = {
+  #    service_account_role_arn = module.ebs_csi_irsa_role.iam_role_arn
+  #  }
   }
 
   tags = {
@@ -275,17 +286,123 @@ module "eks" {
   }
 }
 
+# EBS CSI Driver를 위한 IRSA 역할
+module "ebs_csi_irsa_role" {
+  source    = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
+  version   = "5.30.0"
+
+  role_name = "${var.cluster_name}-ebs-csi-role"
+  attach_ebs_csi_policy = true
+
+  oidc_providers = {
+    main = {
+      provider_arn               = module.eks.oidc_provider_arn
+      namespace_service_accounts = ["kube-system:ebs-csi-controller-sa"]
+    }
+  }
+
+  depends_on = [module.eks]
+}
+
+# EBS CSI Driver 애드온을 별도의 리소스로 생성
+resource "aws_eks_addon" "ebs_csi" {
+  cluster_name             = module.eks.cluster_name
+  addon_name              = "aws-ebs-csi-driver"
+  addon_version           = "v1.36.0-eksbuild.1"
+
+  service_account_role_arn = module.ebs_csi_irsa_role.iam_role_arn
+
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "PRESERVE"
+
+  depends_on = [module.ebs_csi_irsa_role]
+}
+
+# EBS CSI Driver에 필요한 추가 정책
+resource "aws_iam_policy" "ebs_csi_policy" {
+  name        = "${var.cluster_name}-ebs-csi-policy"
+  description = "Policy for EBS CSI Driver"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:CreateSnapshot",
+          "ec2:AttachVolume",
+          "ec2:DetachVolume",
+          "ec2:ModifyVolume",
+          "ec2:DescribeAvailabilityZones",
+          "ec2:DescribeInstances",
+          "ec2:DescribeSnapshots",
+          "ec2:DescribeTags",
+          "ec2:DescribeVolumes",
+          "ec2:DescribeVolumesModifications"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ebs_csi_policy" {
+  policy_arn = aws_iam_policy.ebs_csi_policy.arn
+  role       = module.ebs_csi_irsa_role.iam_role_name
+
+  depends_on = [module.ebs_csi_irsa_role]
+}
+
+########################## RDS 설정 시작 ##########################
+# RDS 파라미터 그룹
+resource "aws_db_parameter_group" "postgres" {
+  family = "postgres16"
+  name   = "${var.cluster_name}-postgres16"
+
+  parameter {
+    name  = "max_connections"
+    value = "100"
+    apply_method = "pending-reboot" 
+
+  }
+}
+
+# RDS 모니터링을 위한 IAM 역할
+resource "aws_iam_role" "rds_monitoring" {
+  name = "${var.cluster_name}-rds-monitoring"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "monitoring.rds.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "rds_monitoring" {
+  role       = aws_iam_role.rds_monitoring.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
+}
+
 # RDS 보안 그룹 생성
 resource "aws_security_group" "rds_sg" {
   name_prefix = "rds-sg-"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    security_groups = [module.eks.node_security_group_id]
-    description = "Allow EKS nodes to access RDS"
+    from_port = 5432
+    to_port   = 5432
+    protocol  = "tcp"
+    security_groups = [
+      module.eks.node_security_group_id
+    ]
+    description = "Allow Backend nodes to access RDS"
   }
 
   egress {
@@ -300,7 +417,7 @@ resource "aws_security_group" "rds_sg" {
   }
 }
 
-# RDS 서브넷 그룹 생성
+# RDS 서브넷 그룹
 resource "aws_db_subnet_group" "rds" {
   name       = "rds-subnet-group"
   subnet_ids = aws_subnet.private[*].id
@@ -309,7 +426,7 @@ resource "aws_db_subnet_group" "rds" {
   }
 }
 
-# RDS 인스턴스 생성
+# RDS 인스턴스
 resource "aws_db_instance" "rds" {
   allocated_storage      = 20
   storage_type          = "gp2"
@@ -320,15 +437,48 @@ resource "aws_db_instance" "rds" {
   db_name               = var.db_name
   username              = var.db_username
   password              = var.db_password
+  parameter_group_name  = aws_db_parameter_group.postgres.name
   db_subnet_group_name  = aws_db_subnet_group.rds.name
   vpc_security_group_ids = [aws_security_group.rds_sg.id]
   publicly_accessible   = false
   skip_final_snapshot   = true
+  
+  backup_retention_period = 7
+  backup_window          = "03:00-04:00"
+  maintenance_window     = "Mon:04:00-Mon:05:00"
+  
+  monitoring_interval    = 60
+  monitoring_role_arn    = aws_iam_role.rds_monitoring.arn
+  
+  performance_insights_enabled = true
 
   tags = {
-    Name = "backend2db"
+    Name        = "backend2db"
+    Environment = "development"
+    Service     = "backend"
   }
 }
+
+# Kubernetes Secret for RDS credentials
+resource "kubernetes_secret" "rds_credentials" {
+  metadata {
+    name      = "rds-credentials"
+    namespace = "default"
+  }
+
+  data = {
+    username = var.db_username
+    password = var.db_password
+    host     = aws_db_instance.rds.endpoint
+    port     = "5432"
+    database = var.db_name
+  }
+
+  depends_on = [
+    module.eks
+  ]
+}
+########################## RDS 설정 끝 ##########################
 
 # ECR 리포지토리 생성
 resource "aws_ecr_repository" "repositories" {
@@ -341,7 +491,7 @@ resource "aws_ecr_repository" "repositories" {
 
   encryption_configuration {
     encryption_type = "AES256"
-  }  
+  }
 
   tags = {
     Name = var.ecr_repository_names[count.index]
