@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-server
+  labels:
+    app: ai-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-server
+  template:
+    metadata:
+      labels:
+        app: ai-server
+    spec:
+      containers:
+      - name: ai-server
+        image: <AWS_ACCOUNT_ID>.dkr.ecr.ap-northeast-2.amazonaws.com/ai-server:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: AWS_REGION
+          value: "ap-northeast-2"
+        - name: S3_BUCKET_NAME
+          value: "my-s3-bucket"  # 실제 S3 버킷 이름으로 변경하세요

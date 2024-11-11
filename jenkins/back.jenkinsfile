@@ -1,67 +1,91 @@
 pipeline {
     agent any
+    
     environment {
         AWS_REGION = 'ap-northeast-2'
-        ECR_REPO = "<ECR_BACKEND_REPO_URL>"  // ECR 리포지토리 URL로 변경
-        IMAGE_TAG = "${env.BUILD_ID}"       // 각 빌드마다 고유한 태그 사용
+        IMAGE_TAG = "build-${BUILD_NUMBER}"
     }
-
+    
     stages {
         stage('Checkout') {
             steps {
-                checkout scm
+                checkout([$class: 'GitSCM', 
+                    branches: [[name: '*/main']], 
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/kakaotech-bootcamp-22/be', 
+                        credentialsId: 'github-token'
+                    ]]
+                ])
             }
         }
-
-        stage('Build Application') {
+        
+        stage('Build & Test') {
             steps {
-                script {
-                    sh './gradlew build' 
-                }
+                sh './gradlew clean build'
             }
         }
-
-        stage('Build Docker Image') {
+        
+        stage('Build & Push to ECR') {
             steps {
                 script {
-                    docker.withRegistry("https://${env.ECR_REPO}", "ecr:aws-credentials") {
-                        // 빌드된 애플리케이션을 포함한 Docker 이미지 생성
-                        def image = docker.build("${env.ECR_REPO}:${IMAGE_TAG}")
-                        image.push()
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding', 
+                        credentialsId: 'hedther',
+                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                    ]]) {
+                        def AWS_ACCOUNT_ID = sh(
+                            script: 'aws sts get-caller-identity --query Account --output text',
+                            returnStdout: true
+                        ).trim()
+                        
+                        env.ECR_REPOSITORY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/backend-server"
+                        
+                        sh """
+                            docker build -t ${env.ECR_REPOSITORY}:${IMAGE_TAG} .
+                            aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${env.ECR_REPOSITORY}
+                            docker push ${env.ECR_REPOSITORY}:${IMAGE_TAG}
+                        """
                     }
                 }
             }
         }
-
-        stage('Push to ECR') {
-            steps {
-                script {
-                    sh '''
-                    aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REPO
-                    docker push $ECR_REPO:$IMAGE_TAG
-                    '''
-                }
-            }
-        }
-
+        
         stage('Deploy to EKS') {
             steps {
                 script {
-                    withCredentials([kubeconfigFile(credentialsId: 'kubeconfig-eks', variable: 'KUBECONFIG')]) {
-                        // Kubernetes YAML 파일로 전체 배포
-                        sh 'kubectl apply -f k8s/backend-deployment.yaml'
+                    withCredentials([
+                        file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG'),
+                        string(credentialsId: 'db-password', variable: 'DB_PASSWORD'),
+                        [$class: 'AmazonWebServicesCredentialsBinding',
+                         credentialsId: 'hedther',
+                         accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                         secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                    ]) {
+                        sh """
+                            sed -i 's|image: .*|image: ${env.ECR_REPOSITORY}:${IMAGE_TAG}|' k8s/deployment.yaml
+                            kubectl apply -f k8s/deployment.yaml
+                            kubectl apply -f k8s/service.yaml
+                        """
+                        
+                        // 배포된 서비스의 외부 IP 또는 도메인 출력
+                        def serviceUrl = sh(
+                            script: "kubectl get svc my-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'",
+                            returnStdout: true
+                        ).trim()
+                        echo "Application is accessible at: http://${serviceUrl}"
                     }
                 }
             }
         }
     }
-
+    
     post {
         success {
-            echo 'Deployment successful!'
+            echo 'Pipeline succeeded!'
         }
         failure {
-            echo 'Deployment failed.'
+            echo 'Pipeline failed!'
         }
     }
 }
