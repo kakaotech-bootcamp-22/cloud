@@ -244,6 +244,8 @@ module "eks" {
       max_size     = 2
       desired_size = 1
 
+      iam_role_arn    = aws_iam_role.eks_node_role.arn  # IAM 역할 추가
+
       tags = {
         "Name" = "ai-node"
         "Type" = "AI"
@@ -256,6 +258,9 @@ module "eks" {
       min_size     = 1
       max_size     = 2
       desired_size = 1
+
+      iam_role_arn    = aws_iam_role.eks_node_role.arn  # 추가
+
 
       tags = {
         "Name" = "backend-node"
@@ -284,6 +289,41 @@ module "eks" {
     Environment = "dev"
     Project     = "my-project"
   }
+}
+
+resource "kubernetes_config_map" "aws_auth" {
+  metadata {
+    name      = "aws-auth"
+    namespace = "kube-system"
+  }
+
+  data = {
+    mapRoles = jsonencode([
+      {
+        rolearn  = aws_iam_role.eks_node_role.arn
+        username = "system:node:{{EC2PrivateDNSName}}"
+        groups   = ["system:bootstrappers", "system:nodes"]
+      }
+    ])
+    mapUsers = jsonencode([
+      {
+        userarn  = "arn:aws:iam::982534349948:user/hedther"  # 사용자 ARN
+        username = "admin"
+        groups   = ["system:masters"]
+      },
+      #################
+      {
+        userarn  = "arn:aws:iam::982534349948:root"          # root 계정 추가 부분
+        username = "root"
+        groups   = ["system:masters"]
+      }
+      #################
+    ])
+
+    
+  }
+
+  depends_on = [module.eks]
 }
 
 # EBS CSI Driver를 위한 IRSA 역할
