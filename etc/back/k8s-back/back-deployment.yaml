@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-server
+  labels:
+    app: backend-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend-server
+  template:
+    metadata:
+      labels:
+        app: backend-server
+    spec:
+      containers:
+      - name: backend-server
+        image: <AWS_ACCOUNT_ID>.dkr.ecr.ap-northeast-2.amazonaws.com/backend-server:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DB_HOST
+          value: "<RDS_ENDPOINT>"  # Terraform 출력값으로 얻은 RDS 엔드포인트로 변경하세요
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: "<DATABASE_NAME>"  # 실제 데이터베이스 이름으로 변경하세요
+        - name: DB_USER
+          value: "<DB_USERNAME>"  # 실제 DB 사용자 이름으로 변경하세요
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-secret
+              key: db_password

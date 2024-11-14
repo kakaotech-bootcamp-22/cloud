@@ -1,0 +1,1 @@
+aws eks --region ap-northeast-2 update-kubeconfig --name my-eks-cluster

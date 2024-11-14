@@ -1,0 +1,15 @@
+# Terraform 관련 파일들
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars.json
+.terraformrc
+terraform.rc
+crash.log
+crash.*.log
+.terraform.lock.hcl
+
+# 로컬 개발환경 관련 파일들
+.DS_Store
+*.bak
+*.swp
