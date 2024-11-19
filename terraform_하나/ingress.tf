@@ -1,8 +1,9 @@
-resource "kubernetes_ingress" "api_gateway" {
-  metadata {
-    name = "api-gateway"
-    namespace = "default"
+# ingress 리소스 정의
 
+resource "kubernetes_ingress" "api_ingress" {
+  metadata {
+    name      = "api-ingress"
+    namespace = "default"
     annotations = {
       "nginx.ingress.kubernetes.io/rewrite-target" = "/"
     }
@@ -10,32 +11,32 @@ resource "kubernetes_ingress" "api_gateway" {
 
   spec {
     rule {
-      host = "your-domain.com" # 사용할 도메인
+      host = "example.com"  # 클러스터 도메인
 
       http {
         path {
-          path = "/fastapi"
+          path     = "/backend"
           path_type = "Prefix"
 
           backend {
             service {
-              name = kubernetes_service.fastapi.metadata[0].name
+              name = "backend-service"
               port {
-                number = 80
+                number = 8080
               }
             }
           }
         }
 
         path {
-          path = "/springboot"
+          path     = "/ai"
           path_type = "Prefix"
 
           backend {
             service {
-              name = kubernetes_service.springboot.metadata[0].name
+              name = "ai-service"
               port {
-                number = 80
+                number = 5000
               }
             }
           }
